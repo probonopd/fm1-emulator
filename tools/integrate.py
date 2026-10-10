@@ -82,7 +82,83 @@ def main():
             if content.count(before) != 1:
                 raise SystemExit("pinned SDL mouse scaling anchor differs")
             content = content.replace(before, after)
+    # Tell the console the window's size in display pixels, on Retina
+    # screens too, so a console that draws itself (the FM-1 panel) can fill
+    # it sharply rather than being stretched; size the window back in points.
+    for before, after in [
+        ("    if (scon->hidden) {\n        flags |= SDL_WINDOW_HIDDEN;\n    }\n",
+         "    if (scon->hidden) {\n        flags |= SDL_WINDOW_HIDDEN;\n    }\n"
+         "    flags |= SDL_WINDOW_ALLOW_HIGHDPI;\n"),
+        ("        scon->real_renderer = SDL_CreateRenderer(scon->real_window, -1, 0);\n",
+         "        scon->real_renderer = SDL_CreateRenderer(scon->real_window, -1, 0);\n"
+         "        sdl2_report_size(scon, false);\n"),
+        ("            QemuUIInfo info = {\n"
+         "                .width = ev->window.data1,\n"
+         "                .height = ev->window.data2,\n"
+         "            };\n"
+         "            qemu_console_set_ui_info(scon->dcl.con, &info, true);\n",
+         "            sdl2_report_size(scon, true);\n"),
+        ("void sdl2_window_resize(struct sdl2_console *scon)\n"
+         "{\n"
+         "    if (!scon->real_window) {\n"
+         "        return;\n"
+         "    }\n"
+         "\n"
+         "    SDL_SetWindowSize(scon->real_window,\n"
+         "                      surface_width(scon->surface),\n"
+         "                      surface_height(scon->surface));\n"
+         "}\n",
+         "void sdl2_report_size(struct sdl2_console *scon, bool delay)\n"
+         "{\n"
+         "    QemuUIInfo info = { 0 };\n"
+         "    int width, height;\n"
+         "\n"
+         "    SDL_GetWindowSize(scon->real_window, &width, &height);\n"
+         "    if (scon->real_renderer) {\n"
+         "        SDL_GetRendererOutputSize(scon->real_renderer, &width, &height);\n"
+         "    }\n"
+         "    info.width = width;\n"
+         "    info.height = height;\n"
+         "    qemu_console_set_ui_info(scon->dcl.con, &info, delay);\n"
+         "}\n"
+         "\n"
+         "void sdl2_window_resize(struct sdl2_console *scon)\n"
+         "{\n"
+         "    int width = surface_width(scon->surface);\n"
+         "    int height = surface_height(scon->surface);\n"
+         "    int window_w, window_h, pixels_w, pixels_h;\n"
+         "\n"
+         "    if (!scon->real_window) {\n"
+         "        return;\n"
+         "    }\n"
+         "    if (scon->real_renderer) {\n"
+         "        SDL_GetWindowSize(scon->real_window, &window_w, &window_h);\n"
+         "        SDL_GetRendererOutputSize(scon->real_renderer, &pixels_w, &pixels_h);\n"
+         "        if (pixels_w > 0 && pixels_h > 0) {\n"
+         "            width = (int64_t)width * window_w / pixels_w;\n"
+         "            height = (int64_t)height * window_h / pixels_h;\n"
+         "        }\n"
+         "        if (width == window_w && height == window_h) {\n"
+         "            return;\n"
+         "        }\n"
+         "    }\n"
+         "    SDL_SetWindowSize(scon->real_window, width, height);\n"
+         "}\n"),
+    ]:
+        if after not in content:
+            if content.count(before) != 1:
+                raise SystemExit("pinned SDL display size anchor differs")
+            content = content.replace(before, after)
     write_changed(sdl, content)
+    header = SOURCE / "include/ui/sdl2.h"
+    content = header.read_text()
+    decl = "void sdl2_report_size(struct sdl2_console *scon, bool delay);\n"
+    anchor = "void sdl2_window_resize(struct sdl2_console *scon);\n"
+    if decl not in content:
+        if content.count(anchor) != 1:
+            raise SystemExit("pinned SDL header anchor differs")
+        content = content.replace(anchor, anchor + decl)
+    write_changed(header, content)
     # Peripheral pages (fm1-sfr.c) left no subpages, so the former subpage
     # read hook is retired: restore upstream text in trees it patched.
     physmem = SOURCE / "system/physmem.c"

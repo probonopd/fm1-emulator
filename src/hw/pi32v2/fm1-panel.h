@@ -10,16 +10,14 @@
 #include "fm1-input.h"
 #include "fm1-lcd.h"
 
-#define FM1_PANEL_WIDTH 1080
-#define FM1_PANEL_HEIGHT 640
 /* Buttons, piano keys, the encoders and MASTER. */
 #define FM1_PANEL_CONTROLS (FM1_PANEL_BUTTONS + FM1_PANEL_KEYS + \
                             FM1_PANEL_ENCODERS + 1)
 
 typedef struct FM1PanelControl {
-    float x, y, w, h;          /* canvas pixels, top-left origin */
+    float x, y, w, h;          /* in the product photo's pixels */
     const char *caption;
-    bool piano, knob;
+    bool piano, knob, dirty;
     QKeyCode contact;
     bool pressed;
     /* Matrix LEDs: [0] the contact's own, [1] PLAY's extra green one. */
@@ -31,16 +29,27 @@ typedef struct FM1PanelControl {
     QEMUTimer *phase_timer;
 } FM1PanelControl;
 
-/* The FM-1 front panel drawn as the machine's one display. Controls close
- * board contacts through QEMU's input layer, as keys and QMP do; any QEMU
- * display (SDL, VNC, ...) shows it and sends it the pointer. */
+/* One LCD pixel's share of one display pixel, along one axis. */
+typedef struct FM1PanelTap {
+    int first, count;
+    float weight[8];
+} FM1PanelTap;
+
+/* The FM-1 front panel drawn as the machine's one display, at the size the
+ * display asks for. Controls close board contacts through QEMU's input
+ * layer, as keys and QMP do; any QEMU display (SDL, VNC, ...) shows it and
+ * sends it the pointer. */
 typedef struct FM1PocPanel {
     QemuConsole *console;
     QemuInputHandlerState *handler;
     VMChangeStateEntry *runstate;
     FM1PocLCD *lcd;
     FM1PocInput *input;
+    int width, height;
+    float scale, x0, y0;       /* display pixel = x0 + photo pixel * scale */
     uint32_t *background;
+    FM1PanelTap *lcd_taps;
+    int lcd_x, lcd_y, lcd_size;
     FM1PanelControl controls[FM1_PANEL_CONTROLS];
     FM1PanelControl *held, *dragged;
     QEMUTimer *release_timer;
