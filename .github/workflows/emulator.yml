@@ -15,6 +15,7 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# macOS 27 runs only under the xcode-27 label (a public preview).
 jobs:
   build:
     name: Build (${{ matrix.package }})
@@ -24,9 +25,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-26
+          - os: xcode-27
             package: macos-arm64
-          - os: ubuntu-24.04
+          - os: ubuntu-26.04
             package: linux-amd64
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -52,9 +53,9 @@ jobs:
       fail-fast: false
       matrix:
         platform:
-          - os: macos-26
+          - os: xcode-27
             package: macos-arm64
-          - os: ubuntu-24.04
+          - os: ubuntu-26.04
             package: linux-amd64
         firmware:
           - name: Felucca 1.5
@@ -88,7 +89,7 @@ jobs:
     # Every push to main, once every build and firmware job passed.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: [build, firmware]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       contents: write
     steps:

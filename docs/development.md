@@ -115,7 +115,7 @@ libgcc linked in), ad-hoc signs the executable on macOS, and packages it with
 notices. On macOS the Xcode Command Line Tools supply the SDK, and clang skips
 conda's default config, which would put conda's iconv before the SDK's. It does not
 bundle firmware or Python. CI builds, tests and runs the firmware checks on
-macOS 26 (Apple Silicon) and Ubuntu 24.04 (x86-64). Each push to `main` builds
+macOS 27 (Apple Silicon) and Ubuntu 26.04 (x86-64). Each push to `main` builds
 its HEAD commit only, cancelling an older run still in progress, and publishes
 both archives as a `build-<run>` GitHub release once every build and firmware
 job passes. Windows is deferred.
