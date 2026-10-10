@@ -156,7 +156,8 @@ def publish_executable(build, source, prefixes):
         "For redistribution retain licensing and provide the corresponding source/build inputs.\n")
     print(f"Standalone executable: {HERE.parent / 'emulator'}")
     system = "macos" if sys.platform == "darwin" else sys.platform
-    package = CACHE / f"fm1-emulator-{system}-{platform.machine()}.tar.gz"
+    arch = {"x86_64": "amd64", "aarch64": "arm64"}.get(platform.machine(), platform.machine())
+    package = CACHE / f"fm1-emulator-{system}-{arch}.tar.gz"
     with tarfile.open(package, "w:gz") as archive:
         for item in sorted(release.iterdir()):
             archive.add(item, arcname=item.name)

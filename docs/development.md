@@ -112,8 +112,9 @@ Publishing copies the shared libraries the executable loads from those
 environments into `lib/` next to it (found through its rpath), checks that it
 starts with them alone, ad-hoc signs it on macOS, and packages it with
 notices. On macOS the Xcode Command Line Tools supply the SDK. It does not
-bundle firmware or Python. CI targets Apple Silicon macOS 26; Windows is
-deferred.
+bundle firmware or Python. CI builds, tests and runs the firmware checks on
+macOS 26 (Apple Silicon) and Ubuntu 24.04 (x86-64); pushing a `v*` tag
+publishes both archives as a GitHub release. Windows is deferred.
 
 For release distribution, retain notices and provide the corresponding QEMU
 and overlay sources/build inputs and LGPL relinking materials. See

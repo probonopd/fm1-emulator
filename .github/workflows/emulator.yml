@@ -3,6 +3,7 @@ name: Emulator
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
 
@@ -10,9 +11,18 @@ permissions:
   contents: read
 
 jobs:
-  macos:
-    runs-on: macos-26
+  build:
+    name: Build (${{ matrix.package }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-26
+            package: macos-arm64
+          - os: ubuntu-24.04
+            package: linux-amd64
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4
@@ -24,19 +34,24 @@ jobs:
         run: mise run test
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: fm1-emulator-macos-arm64
-          path: .cache/fm1-emulator-macos-arm64.tar.gz
+          name: fm1-emulator-${{ matrix.package }}
+          path: .cache/fm1-emulator-${{ matrix.package }}.tar.gz
           if-no-files-found: error
 
   firmware:
-    name: Firmware (${{ matrix.name }})
-    needs: macos
-    runs-on: macos-26
+    name: Firmware (${{ matrix.firmware.name }}, ${{ matrix.platform.package }})
+    needs: build
+    runs-on: ${{ matrix.platform.os }}
     timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
-        include:
+        platform:
+          - os: macos-26
+            package: macos-arm64
+          - os: ubuntu-24.04
+            package: linux-amd64
+        firmware:
           - name: Felucca 1.5
             url: https://github.com/hugelton/Felucca/releases/download/v1.5/felucca-1.5.fwsc
           - name: FM-1
@@ -48,13 +63,13 @@ jobs:
           install_args: python
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: fm1-emulator-macos-arm64
+          name: fm1-emulator-${{ matrix.platform.package }}
           path: .cache
       - name: Extract binary
-        run: tar -xzf .cache/fm1-emulator-macos-arm64.tar.gz emulator lib
+        run: tar -xzf .cache/fm1-emulator-${{ matrix.platform.package }}.tar.gz emulator lib
       - name: Download firmware
         env:
-          FIRMWARE_URL: ${{ matrix.url }}
+          FIRMWARE_URL: ${{ matrix.firmware.url }}
         run: curl --fail --location --retry 3 --output .cache/firmware.fwsc "$FIRMWARE_URL"
       - name: Stress
         id: stress
@@ -62,3 +77,23 @@ jobs:
       - name: Panel smoke
         if: ${{ !cancelled() && steps.stress.outcome != 'skipped' }}
         run: mise run panel_smoke .cache/firmware.fwsc
+
+  release:
+    name: Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: fm1-emulator-*
+          merge-multiple: true
+          path: dist
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "$GITHUB_REF_NAME" dist/*.tar.gz
+          --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes

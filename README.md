@@ -3,6 +3,23 @@
 Run FM-1 application firmware on macOS or Linux, with an FM-1 panel, mouse and keyboard controls,
 audio, and a USB console. Built on QEMU with a pi32v2 CPU and FM-1 board model.
 
+## Download
+
+Prebuilt archives for macOS on Apple Silicon and Linux on x86-64 are attached
+to each [release](https://github.com/simonjohansson/fm1-emulator/releases):
+
+```sh
+mkdir fm1-emulator && cd fm1-emulator
+curl -fL https://github.com/simonjohansson/fm1-emulator/releases/latest/download/fm1-emulator-macos-arm64.tar.gz | tar -xz
+# or fm1-emulator-linux-amd64.tar.gz
+```
+
+Each archive holds `emulator` and the shared libraries it loads in `lib/`;
+keep them side by side. The macOS binary is ad-hoc signed, not notarized: an
+archive downloaded with a browser needs `xattr -dr com.apple.quarantine .`
+first. On Linux, SDL opens the desktop's X11 or Wayland and audio libraries
+at run time.
+
 ## Run
 
 ```sh
