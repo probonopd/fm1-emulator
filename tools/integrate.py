@@ -44,6 +44,45 @@ def main():
                 raise SystemExit("pinned native launcher hook anchor differs")
             content = content.replace(before, after)
     write_changed(entry, content)
+    # The 2D SDL renderer sets a logical size, so SDL already reports mouse
+    # positions in surface pixels. Scaling them again by the window size
+    # sent clicks astray in any window but the natural size, and the grab
+    # that confines the cursor ended only on an exact window-edge position.
+    sdl = SOURCE / "ui/sdl2.c"
+    content = sdl.read_text()
+    for before, after in [
+        ("        max_x = scr_w - 1;\n"
+         "        max_y = scr_h - 1;\n"
+         "        if (gui_grab && !gui_fullscreen\n"
+         "            && (ev->motion.x == 0 || ev->motion.y == 0 ||\n"
+         "                ev->motion.x == max_x || ev->motion.y == max_y)) {\n",
+         "        max_x = surface_width(scon->surface) - 1;\n"
+         "        max_y = surface_height(scon->surface) - 1;\n"
+         "        if (gui_grab && !gui_fullscreen\n"
+         "            && (ev->motion.x <= 0 || ev->motion.y <= 0 ||\n"
+         "                ev->motion.x >= max_x || ev->motion.y >= max_y)) {\n"),
+        ("    int scr_w, scr_h, surf_w, surf_h, x, y, dx, dy;\n",
+         "    int scr_w, scr_h, x, y, dx, dy;\n"),
+        ("    surf_w = surface_width(scon->surface);\n"
+         "    surf_h = surface_height(scon->surface);\n"
+         "    x = (int64_t)ev->motion.x * surf_w / scr_w;\n"
+         "    y = (int64_t)ev->motion.y * surf_h / scr_h;\n"
+         "    dx = (int64_t)ev->motion.xrel * surf_w / scr_w;\n"
+         "    dy = (int64_t)ev->motion.yrel * surf_h / scr_h;\n",
+         "    x = ev->motion.x;\n"
+         "    y = ev->motion.y;\n"
+         "    dx = ev->motion.xrel;\n"
+         "    dy = ev->motion.yrel;\n"),
+        ("    x = (int64_t)bev->x * surface_width(scon->surface) / scr_w;\n"
+         "    y = (int64_t)bev->y * surface_height(scon->surface) / scr_h;\n",
+         "    x = bev->x;\n"
+         "    y = bev->y;\n"),
+    ]:
+        if after not in content:
+            if content.count(before) != 1:
+                raise SystemExit("pinned SDL mouse scaling anchor differs")
+            content = content.replace(before, after)
+    write_changed(sdl, content)
     # Peripheral pages (fm1-sfr.c) left no subpages, so the former subpage
     # read hook is retired: restore upstream text in trees it patched.
     physmem = SOURCE / "system/physmem.c"
