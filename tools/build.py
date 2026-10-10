@@ -63,7 +63,10 @@ def mise_prefix(env, package):
 def build_tools(tools, env):
     """Archive with the LLVM matching mise's clang: the system ar cannot index
     its LTO bitcode, and Meson only accepts an archiver named ar. Ask
-    pkg-config for static linking flags, as every library linked is static."""
+    pkg-config for static linking flags, as every library linked is static.
+    Run clang without conda's default config, whose include and library
+    paths put conda's libiconv before the C library's; on Linux name the
+    glibc sysroot that config supplied."""
     (tools / "bin").mkdir(parents=True, exist_ok=True)
     for name in ("ar", "ranlib"):
         target = shutil.which(f"llvm-{name}", path=env["PATH"])
@@ -77,21 +80,36 @@ def build_tools(tools, env):
     path = os.pathsep.join(entry for entry in env["PATH"].split(os.pathsep)
                            if Path(entry) != tools / "bin")
     pkg_config = shutil.which("pkg-config", path=path)
-    if not pkg_config:
-        raise SystemExit("no pkg-config on PATH: run this as `mise run build`")
+    clang = shutil.which("clang", path=path)
+    if not pkg_config or not clang:
+        raise SystemExit("no pkg-config or clang on PATH: run this as `mise run build`")
+    flags = "--no-default-config"
+    if sys.platform != "darwin":
+        def ask(option):
+            return subprocess.check_output([clang, option], text=True).strip()
+        install = Path(ask("-print-resource-dir")).parents[2]
+        flags += f' --sysroot="{install / ask("-print-target-triple") / "sysroot"}"'
     wrapper = tools / "bin/pkg-config"
     if wrapper.is_symlink():
         wrapper.unlink()  # to pkgconf, which older builds compiled here
-    integrate.write_changed(wrapper, f'#!/bin/sh\nexec "{pkg_config}" --static "$@"\n')
-    wrapper.chmod(0o755)
+    for name, command in (("pkg-config", f'"{pkg_config}" --static'), ("clang", f'"{clang}" {flags}')):
+        wrapper = tools / "bin" / name
+        integrate.write_changed(wrapper, f'#!/bin/sh\nexec {command} "$@"\n')
+        wrapper.chmod(0o755)
 
 
 def static_dependencies(env, venv):
-    """Static GLib, with PCRE2, zlib, libffi and (macOS) libintl from its
-    pinned fallbacks, and conda-forge's static SDL2, in one prefix without
-    shared libraries, so the executable carries them all."""
+    """Static GLib, with PCRE2, zlib and (macOS) libintl from its pinned
+    fallbacks, and conda-forge's static SDL2, in one prefix without shared
+    libraries, so the executable carries them all. GObject, which the
+    emulator does not link, takes conda-forge's libffi, as GLib's own
+    fallback for it needs git."""
     lib = DEPS / "lib"
     if not (lib / "libglib-2.0.a").exists():
+        # The clang wrapper, not the system's cc, against the C library the
+        # emulator links.
+        glib_env = dict(env, CC="clang", OBJC="clang", PKG_CONFIG_PATH=os.pathsep.join(
+            [env["PKG_CONFIG_PATH"], str(mise_prefix(env, "libffi") / "lib/pkgconfig")]))
         archive = fetch(GLIB_URL, Path(GLIB_URL).name, GLIB_SHA)
         source = CACHE / Path(GLIB_URL).name.removesuffix(".tar.xz")
         if not source.exists():
@@ -100,11 +118,11 @@ def static_dependencies(env, venv):
         shutil.rmtree(source / "_native", ignore_errors=True)
         run([venv / "bin/meson", "setup", "_native", f"--prefix={DEPS}", "--libdir=lib",
              "--default-library=static", "--buildtype=release",
-             "--force-fallback-for=pcre2,zlib,libffi", "-Dselinux=disabled", "-Dxattr=false",
+             "--force-fallback-for=pcre2,zlib", "-Dselinux=disabled", "-Dxattr=false",
              "-Dlibmount=disabled", "-Dsysprof=disabled", "-Dnls=disabled", "-Dtests=false",
              "-Dintrospection=disabled", "-Dman-pages=disabled", "-Ddocumentation=false",
-             "-Dglib_debug=disabled"], source, env, "glib-configure.log")
-        run([venv / "bin/meson", "install", "-C", "_native"], source, env, "glib-build.log")
+             "-Dglib_debug=disabled"], source, glib_env, "glib-configure.log")
+        run([venv / "bin/meson", "install", "-C", "_native"], source, glib_env, "glib-build.log")
     sdl = mise_prefix(env, "sdl2")
     shutil.copy2(sdl / "lib/libSDL2.a", lib / "libSDL2.a")
     # SDL_syswm.h includes Xlib.h on Linux, whose protocol headers conda
@@ -220,10 +238,6 @@ def main():
     tools = CACHE / "tools"
     env["PATH"] = os.pathsep.join([str(venv / "bin"), str(tools / "bin"), env["PATH"]])
     env["PKG_CONFIG_PATH"] = str(DEPS / "lib/pkgconfig")
-    if sys.platform == "darwin":
-        # conda's clang config puts its own iconv and libraries before the
-        # SDK's; macOS needs only the SDK (on Linux it supplies the sysroot).
-        env["CLANG_NO_DEFAULT_CONFIG"] = "1"
     build_tools(tools, env)
     static_dependencies(env, venv)
     integrate.main()

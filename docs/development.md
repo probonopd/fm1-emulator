@@ -107,13 +107,15 @@ Use `mise run build -- --reconfigure` when changing configuration.
 
 The native build (macOS or Linux) uses SDL for the window and audio, and LTO.
 mise provides the compiler (clang), pkg-config and conda-forge's static SDL2.
-GLib is built statically from its pinned release, with its own pinned PCRE2,
-zlib, libffi and (macOS) proxy-libintl fallbacks, into `.cache/native-deps`;
+GLib is built statically by mise's clang from its pinned release, with its own
+pinned PCRE2, zlib and (macOS) proxy-libintl fallbacks and conda-forge's
+libffi, into `.cache/native-deps`;
 pkg-config is asked for static flags. Publishing rejects any library the OS
 does not ship (macOS: `/usr/lib` and system frameworks; Linux: glibc, with
 libgcc linked in), ad-hoc signs the executable on macOS, and packages it with
-notices. On macOS the Xcode Command Line Tools supply the SDK, and clang skips
-conda's default config, which would put conda's iconv before the SDK's. It does not
+notices. On macOS the Xcode Command Line Tools supply the SDK. A clang wrapper
+in `.cache/tools/bin` skips conda's default config, which would put conda's
+libiconv before the C library's, and names conda's glibc sysroot on Linux. It does not
 bundle firmware or Python. CI builds, tests and runs the firmware checks on
 macOS 27 (Apple Silicon) and Ubuntu 26.04 (x86-64). Each push to `main` builds
 its HEAD commit only, cancelling an older run still in progress, and publishes

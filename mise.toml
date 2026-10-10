@@ -7,8 +7,9 @@ description = "Build and package the native emulator (macOS or Linux)"
 # Every compiler and tool comes from mise: clang with LLVM's archiver and
 # linker (for LTO; Linux links with lld), pkg-config, and conda-forge's static
 # SDL2 with, on Linux, xorgproto's X11 headers. GLib is built statically from
-# pinned source, so the executable needs no libraries the OS lacks.
-tools = { clang = "23.1.2", "conda:sdl2" = "2.30.10", "conda:xorg-xorgproto" = "2025.1", "conda:llvm-tools" = "23.1.2", "conda:lld" = "23.1.2", "conda:pkg-config" = "0.29.2" }
+# pinned source (libffi only builds its GObject), so the executable needs no
+# libraries the OS lacks.
+tools = { clang = "23.1.2", "conda:sdl2" = "2.30.10", "conda:libffi" = "3.5.2", "conda:xorg-xorgproto" = "2025.1", "conda:llvm-tools" = "23.1.2", "conda:lld" = "23.1.2", "conda:pkg-config" = "0.29.2" }
 run = "python tools/build.py --standalone"
 
 [tasks.test]
