@@ -31,8 +31,7 @@ DEPENDENCIES = [
      "f3a3082a23b37c293a4fcd1053147b371f2ff91fa7ea1b2a52e335676bac82dc"),
     ("pixman", "https://cairographics.org/releases/pixman-0.44.2.tar.gz",
      "6349061ce1a338ab6952b92194d1b0377472244208d47ff25bef86fc71973466"),
-    ("glib", "https://download.gnome.org/sources/glib/2.84/glib-2.84.0.tar.xz",
-     "f8823600cb85425e2815cfad82ea20fdaa538482ab74e7293d58b3f64a5aff6a"),
+    ("glib", build.GLIB_URL, build.GLIB_SHA),
 ]
 CACHE = build.CACHE
 WASM = CACHE / "wasm"

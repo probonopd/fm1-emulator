@@ -106,15 +106,18 @@ Use `mise run build` after changing sources; it integrates changed files before 
 Use `mise run build -- --reconfigure` when changing configuration.
 
 The native build (macOS or Linux) uses SDL for the window and audio, and LTO.
-mise provides the compiler (clang) and conda-forge's GLib, SDL2 and pkg-config;
-the build reads their pkg-config files from the conda environments on PATH.
-Publishing copies the shared libraries the executable loads from those
-environments into `lib/` next to it (found through its rpath), checks that it
-starts with them alone, ad-hoc signs it on macOS, and packages it with
-notices. On macOS the Xcode Command Line Tools supply the SDK. It does not
+mise provides the compiler (clang), pkg-config and conda-forge's static SDL2.
+GLib is built statically from its pinned release, with its own pinned PCRE2,
+zlib, libffi and (macOS) proxy-libintl fallbacks, into `.cache/native-deps`;
+pkg-config is asked for static flags. Publishing rejects any library the OS
+does not ship (macOS: `/usr/lib` and system frameworks; Linux: glibc, with
+libgcc linked in), ad-hoc signs the executable on macOS, and packages it with
+notices. On macOS the Xcode Command Line Tools supply the SDK, and clang skips
+conda's default config, which would put conda's iconv before the SDK's. It does not
 bundle firmware or Python. CI builds, tests and runs the firmware checks on
 macOS 26 (Apple Silicon) and Ubuntu 24.04 (x86-64); pushing a `v*` tag
-publishes both archives as a GitHub release. Windows is deferred.
+publishes both archives as a GitHub release once every build and firmware job
+passes. Windows is deferred.
 
 For release distribution, retain notices and provide the corresponding QEMU
 and overlay sources/build inputs and LGPL relinking materials. See

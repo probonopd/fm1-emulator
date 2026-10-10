@@ -66,7 +66,7 @@ jobs:
           name: fm1-emulator-${{ matrix.platform.package }}
           path: .cache
       - name: Extract binary
-        run: tar -xzf .cache/fm1-emulator-${{ matrix.platform.package }}.tar.gz emulator lib
+        run: tar -xzf .cache/fm1-emulator-${{ matrix.platform.package }}.tar.gz emulator
       - name: Download firmware
         env:
           FIRMWARE_URL: ${{ matrix.firmware.url }}
@@ -80,8 +80,9 @@ jobs:
 
   release:
     name: Release
+    # Only for v* tags, and only once every build and firmware job passed.
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
+    needs: [build, firmware]
     runs-on: ubuntu-24.04
     permissions:
       contents: write

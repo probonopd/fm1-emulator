@@ -12,7 +12,6 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-import tomllib
 import urllib.request
 import integrate
 
@@ -22,6 +21,10 @@ CACHE = ROOT / ".cache"
 QEMU = integrate.QEMU
 QEMU_COMMIT = "4fc49f46dc95d4a27de2509e7fceb2931e91faeb"
 QEMU_SHA = "731b5681e4bb18be313231579b8efd0296c5b015fa36dc533874b639ba838016"
+GLIB_URL = "https://download.gnome.org/sources/glib/2.84/glib-2.84.0.tar.xz"
+GLIB_SHA = "f8823600cb85425e2815cfad82ea20fdaa538482ab74e7293d58b3f64a5aff6a"
+# Static libraries the native executable links: GLib's and SDL2's.
+DEPS = CACHE / "native-deps"
 PACKAGES = ["meson==1.5.0", "ninja==1.11.1.4", "distlib==0.3.9", "pycotap==1.3.1"]
 
 
@@ -48,27 +51,19 @@ def run(command, cwd, env, log):
         raise SystemExit(f"build step failed; inspect {CACHE / log}")
 
 
-def mise_prefixes(env):
-    """The build task's conda-forge environments on PATH, in mise.toml's order.
-
-    mise installs each package into its own environment, with its own copies
-    of its dependencies (SDL2's on Linux include GLib), so the first listed
-    wins wherever two provide the same library."""
-    tools = tomllib.loads((ROOT / "mise.toml").read_text())["tasks"]["build"]["tools"]
-    on_path = {Path(entry).parent for entry in env["PATH"].split(os.pathsep)}
-    prefixes = []
-    for tool in tools:
-        if tool.startswith("conda:"):
-            prefix = next((p for p in on_path if p.parent.name == "conda-" + tool[6:]), None)
-            if prefix is None:
-                raise SystemExit(f"{tool} is not on PATH: run this as `mise run build`")
-            prefixes.append(prefix)
-    return prefixes
+def mise_prefix(env, package):
+    """The conda-forge environment mise put on PATH for package."""
+    for entry in env["PATH"].split(os.pathsep):
+        prefix = Path(entry).parent
+        if prefix.parent.name == f"conda-{package}" and (prefix / "conda-meta").is_dir():
+            return prefix
+    raise SystemExit(f"conda:{package} is not on PATH: run this as `mise run build`")
 
 
-def llvm_tools(tools, env):
+def build_tools(tools, env):
     """Archive with the LLVM matching mise's clang: the system ar cannot index
-    its LTO bitcode, and Meson only accepts an archiver named ar."""
+    its LTO bitcode, and Meson only accepts an archiver named ar. Ask
+    pkg-config for static linking flags, as every library linked is static."""
     (tools / "bin").mkdir(parents=True, exist_ok=True)
     for name in ("ar", "ranlib"):
         target = shutil.which(f"llvm-{name}", path=env["PATH"])
@@ -79,74 +74,97 @@ def llvm_tools(tools, env):
         if not link.is_symlink() or link.readlink() != target:
             link.unlink(missing_ok=True)
             link.symlink_to(target)
+    path = os.pathsep.join(entry for entry in env["PATH"].split(os.pathsep)
+                           if Path(entry) != tools / "bin")
+    pkg_config = shutil.which("pkg-config", path=path)
+    if not pkg_config:
+        raise SystemExit("no pkg-config on PATH: run this as `mise run build`")
+    wrapper = tools / "bin/pkg-config"
+    if wrapper.is_symlink():
+        wrapper.unlink()  # to pkgconf, which older builds compiled here
+    integrate.write_changed(wrapper, f'#!/bin/sh\nexec "{pkg_config}" --static "$@"\n')
+    wrapper.chmod(0o755)
 
 
-def bundle_libraries(executable, lib, prefixes):
-    """Copy the mise-provided shared libraries the executable loads into lib/."""
-    found = {}
+def static_dependencies(env, venv):
+    """Static GLib, with PCRE2, zlib, libffi and (macOS) libintl from its
+    pinned fallbacks, and conda-forge's static SDL2, in one prefix without
+    shared libraries, so the executable carries them all."""
+    lib = DEPS / "lib"
+    if not (lib / "libglib-2.0.a").exists():
+        archive = fetch(GLIB_URL, Path(GLIB_URL).name, GLIB_SHA)
+        source = CACHE / Path(GLIB_URL).name.removesuffix(".tar.xz")
+        if not source.exists():
+            with tarfile.open(archive) as tar:
+                tar.extractall(CACHE, filter="data")
+        shutil.rmtree(source / "_native", ignore_errors=True)
+        run([venv / "bin/meson", "setup", "_native", f"--prefix={DEPS}", "--libdir=lib",
+             "--default-library=static", "--buildtype=release",
+             "--force-fallback-for=pcre2,zlib,libffi", "-Dselinux=disabled", "-Dxattr=false",
+             "-Dlibmount=disabled", "-Dsysprof=disabled", "-Dnls=disabled", "-Dtests=false",
+             "-Dintrospection=disabled", "-Dman-pages=disabled", "-Ddocumentation=false",
+             "-Dglib_debug=disabled"], source, env, "glib-configure.log")
+        run([venv / "bin/meson", "install", "-C", "_native"], source, env, "glib-build.log")
+    sdl = mise_prefix(env, "sdl2")
+    shutil.copy2(sdl / "lib/libSDL2.a", lib / "libSDL2.a")
+    # SDL_syswm.h includes Xlib.h on Linux, whose protocol headers conda
+    # ships separately in xorgproto.
+    headers = [sdl / "include/SDL2"]
+    if sys.platform != "darwin":
+        headers += [sdl / "include/X11", mise_prefix(env, "xorg-xorgproto") / "include/X11"]
+    for directory in headers:
+        shutil.copytree(directory, DEPS / "include" / directory.name, dirs_exist_ok=True)
+    # Without the rpath into this cache that conda's Linux package adds.
+    package = (sdl / "lib/pkgconfig/sdl2.pc").read_text().replace(str(sdl), str(DEPS))
+    package = package.replace("-Wl,-rpath,${libdir}", "").replace("-Wl,--enable-new-dtags", "")
+    integrate.write_changed(lib / "pkgconfig/sdl2.pc", package)
+
+
+def check_dependencies(executable):
+    """Reject any shared library the operating system does not provide."""
     if sys.platform == "darwin":
-        pending = [executable]
-        while pending:
-            listing = subprocess.check_output(["otool", "-L", str(pending.pop())], text=True)
-            for line in listing.splitlines()[1:]:
-                name = line.strip().split(" (", 1)[0]
-                if name.startswith(("/usr/lib/", "/System/Library/")):
-                    continue
-                if not name.startswith("@rpath/"):
-                    raise SystemExit(f"unexpected library dependency: {name}")
-                name = name.removeprefix("@rpath/")
-                if name not in found:
-                    found[name] = next((prefix / "lib" / name for prefix in prefixes
-                                        if (prefix / "lib" / name).is_file()), None)
-                    if found[name] is None:
-                        raise SystemExit(f"no mise package provides {name}")
-                    pending.append(found[name])
+        listing = subprocess.check_output(["otool", "-L", str(executable)], text=True)
+        names = [line.strip().split(" (", 1)[0] for line in listing.splitlines()[1:]]
+        foreign = [name for name in names if not name.startswith(("/usr/lib/", "/System/Library/"))]
     else:
-        env = dict(os.environ, LD_LIBRARY_PATH=os.pathsep.join(str(p / "lib") for p in prefixes))
-        for line in subprocess.check_output(["ldd", str(executable)], env=env, text=True).splitlines():
-            name, _, path = line.strip().partition(" => ")
-            path = Path(path.split(" (", 1)[0])
-            if any(path.is_relative_to(prefix) for prefix in prefixes):
-                found[name] = path
-            elif "not found" in line:
-                raise SystemExit(f"no mise package provides {name}")
-    shutil.rmtree(lib, ignore_errors=True)
-    lib.mkdir()
-    for name, path in found.items():
-        shutil.copy2(path, lib / name)
+        listing = subprocess.check_output(["ldd", str(executable)], text=True)
+        names = [line.strip().split(" ", 1)[0] for line in listing.splitlines()]
+        system = ("linux-vdso.so", "/lib", "ld-linux", "libc.so", "libm.so", "libdl.so",
+                  "libpthread.so", "librt.so", "libutil.so")
+        foreign = [name for name in names if not name.startswith(system)]
+    if foreign:
+        raise SystemExit(f"the executable still needs installed libraries: {', '.join(foreign)}")
 
 
-def publish_executable(build, source, prefixes):
-    """Publish the executable with its libraries and reject any it cannot find."""
+def publish_executable(build, source):
+    """Publish one native executable that needs no installed libraries."""
     release = CACHE / "release"
     release.mkdir(exist_ok=True)
+    shutil.rmtree(release / "lib", ignore_errors=True)
     target = release / "emulator.new"
     shutil.copy2(build / "qemu-system-pi32v2", target)
-    bundle_libraries(target, release / "lib", prefixes)
+    try:
+        check_dependencies(target)
+    except SystemExit:
+        target.unlink()
+        raise
     if sys.platform == "darwin":
         subprocess.run(["codesign", "--force", "--sign", "-", str(target)], check=True)
         subprocess.run(["codesign", "--verify", "--strict", str(target)], check=True)
-    # The executable must load from lib/ alone, without the mise packages.
-    clean = {k: v for k, v in os.environ.items() if not k.startswith(("DYLD_", "LD_"))}
-    if subprocess.run([str(target), "--version"], env=clean, capture_output=True).returncode:
-        target.unlink()
-        raise SystemExit("the published executable does not start with its bundled libraries")
     target.replace(release / "emulator")
-    # A link, so the executable finds lib/ next to its real path. Replacing it
-    # is atomic, preserving a running executable and the last good build.
+    # Publish atomically, preserving a running executable and the last good build.
     with tempfile.TemporaryDirectory(prefix=".emulator-", dir=HERE.parent) as staged:
         executable = Path(staged) / "emulator"
-        executable.symlink_to(release / "emulator")
+        shutil.copy2(release / "emulator", executable)
         executable.replace(HERE.parent / "emulator")
     shutil.copy2(ROOT / "LICENSE", release / "COPYING.GPL-2.0")
     shutil.copy2(ROOT / "LICENSES.md", release / "LICENSES.md")
-    # Retain the notices of the bundled libraries; QEMU ships the LGPL text.
+    # Retain the notices of the linked libraries; QEMU ships the LGPL text.
+    glib = CACHE / Path(GLIB_URL).name.removesuffix(".tar.xz")
     notices = {"GLib-LGPL-2.1.txt": source / "COPYING.LIB"}
-    notices |= {"PCRE2-COPYING.txt": prefix / "share/doc/pcre2/COPYING" for prefix in prefixes
-                if (prefix / "share/doc/pcre2/COPYING").exists()}
+    notices |= {"PCRE2-LICENCE.txt": path for path in glib.glob("subprojects/pcre2-*/LICENCE*")}
     for name, notice in notices.items():
-        if notice.exists():
-            shutil.copy2(notice, release / name)
+        shutil.copy2(notice, release / name)
     integrate.write_changed(release / "RUNNING.txt",
         "Run: ./emulator path/to/firmware.bin\n"
         "Close the window to quit. Use --help for controls.\n"
@@ -168,7 +186,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--reconfigure", action="store_true")
     parser.add_argument("--standalone", action="store_true",
-                        help="publish ./emulator and an archive with its libraries bundled")
+                        help="publish ./emulator and a distribution archive")
     args = parser.parse_args()
     build = CACHE / ("build-standalone" if args.standalone else "build")
     CACHE.mkdir(exist_ok=True)
@@ -201,37 +219,36 @@ def main():
         (venv / ".requirements").write_text("\n".join(PACKAGES))
     tools = CACHE / "tools"
     env["PATH"] = os.pathsep.join([str(venv / "bin"), str(tools / "bin"), env["PATH"]])
-    prefixes = mise_prefixes(env)
-    env["PKG_CONFIG_PATH"] = os.pathsep.join(str(prefix / "lib/pkgconfig") for prefix in prefixes)
-    llvm_tools(tools, env)
+    env["PKG_CONFIG_PATH"] = str(DEPS / "lib/pkgconfig")
+    if sys.platform == "darwin":
+        # conda's clang config puts its own iconv and libraries before the
+        # SDK's; macOS needs only the SDK (on Linux it supplies the sysroot).
+        env["CLANG_NO_DEFAULT_CONFIG"] = "1"
+    build_tools(tools, env)
+    static_dependencies(env, venv)
     integrate.main()
     build.mkdir(exist_ok=True)
-    config_host = build / "config-host.h"
-    needs_sdl = (not config_host.exists() or
-                 "#define CONFIG_SDL" not in config_host.read_text().splitlines())
-    build_options = build / "meson-info/intro-buildoptions.json"
-    lto_enabled = build_options.exists() and any(
-        option["name"] == "b_lto" and option["value"] is True
-        for option in json.loads(build_options.read_text()))
-    if args.reconfigure or not (build / "build.ninja").exists() or needs_sdl or not lto_enabled:
-        # GNU ld cannot link LLVM bitcode; macOS's linker can.
-        ldflags = "-Wl,-rpath,@executable_path/lib" if sys.platform == "darwin" else \
-            "-fuse-ld=lld -Wl,-rpath,$ORIGIN/lib"
-        # SDL_syswm.h includes Xlib.h, whose protocol headers are in xorgproto.
-        xorgproto = next(p for p in prefixes if p.parent.name == "conda-xorg-xorgproto")
-        cflags = "" if sys.platform == "darwin" else f"-isystem {xorgproto / 'include'}"
-        run([source / "configure", "--target-list=pi32v2-softmmu", f"--python={venv / 'bin/python'}",
-             "--cc=clang", "--objcc=clang", "--host-cc=clang",
-             "--without-default-features", "--enable-tcg", "--disable-fdt", "--disable-docs",
-             "--disable-user", "--disable-tools", "--disable-guest-agent", "--disable-slirp",
-             "--disable-capstone", "--enable-werror",
-             "--enable-sdl", "--audio-drv-list=sdl", "--enable-lto",
-             f"--extra-cflags={cflags}", f"--extra-ldflags={ldflags}"],
-            build, env, "configure.log")
+    # GNU ld cannot link LLVM bitcode; macOS's linker can. Linux links
+    # libgcc in too, leaving only the C library dynamic.
+    ldflags = "" if sys.platform == "darwin" else "-fuse-ld=lld -static-libgcc"
+    configure = [source / "configure", "--target-list=pi32v2-softmmu", f"--python={venv / 'bin/python'}",
+                 "--cc=clang", "--objcc=clang", "--host-cc=clang",
+                 "--without-default-features", "--enable-tcg", "--disable-fdt", "--disable-docs",
+                 "--disable-user", "--disable-tools", "--disable-guest-agent", "--disable-slirp",
+                 "--disable-capstone", "--enable-werror",
+                 "--enable-sdl", "--audio-drv-list=sdl", "--enable-lto",
+                 f"--extra-ldflags={ldflags}"]
+    # Configure again whenever its command line changes.
+    stamp = build / "fm1-configure.txt"
+    command = "\n".join(map(str, configure))
+    if args.reconfigure or not (build / "build.ninja").exists() or \
+            not stamp.exists() or stamp.read_text() != command:
+        run(configure, build, env, "configure.log")
+        stamp.write_text(command)
     run([venv / "bin/ninja", "-j8", "qemu-system-pi32v2"], build, env, "build.log")
     print(f"Built {build / 'qemu-system-pi32v2'} (QEMU {QEMU}, {QEMU_COMMIT})")
     if args.standalone:
-        publish_executable(build, source, prefixes)
+        publish_executable(build, source)
 
 
 if __name__ == "__main__":

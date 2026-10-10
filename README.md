@@ -14,11 +14,11 @@ curl -fL https://github.com/simonjohansson/fm1-emulator/releases/latest/download
 # or fm1-emulator-linux-amd64.tar.gz
 ```
 
-Each archive holds `emulator` and the shared libraries it loads in `lib/`;
-keep them side by side. The macOS binary is ad-hoc signed, not notarized: an
-archive downloaded with a browser needs `xattr -dr com.apple.quarantine .`
-first. On Linux, SDL opens the desktop's X11 or Wayland and audio libraries
-at run time.
+Each archive holds one self-contained `emulator` plus license notices. It
+links only libraries the OS ships: system frameworks on macOS, glibc on Linux,
+where SDL opens the desktop's X11 or Wayland and audio libraries at run time.
+The macOS binary is ad-hoc signed, not notarized: an archive downloaded with a
+browser needs `xattr -dr com.apple.quarantine .` first.
 
 ## Run
 
@@ -55,10 +55,11 @@ mise install
 mise run build
 ```
 
-mise supplies everything else: clang, and GLib, SDL2 and pkg-config from
+mise supplies everything else: clang, pkg-config, and static SDL2 from
 conda-forge. No Homebrew or apt packages are needed. The first build downloads
-pinned QEMU sources and Python build tools. It produces `./emulator` and a
-distribution archive in `.cache/` with the libraries it needs in `lib/`.
+pinned QEMU and GLib sources and Python build tools, and builds GLib
+statically. It produces `./emulator`, which links only OS libraries, and a
+distribution archive in `.cache/`.
 Python is needed only to build and test.
 
 ## Status
