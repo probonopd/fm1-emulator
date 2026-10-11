@@ -34,4 +34,5 @@ void sweep_illegal(uint32_t op);
 #define gen_helper_pi32v2_watch_store(...) ((void)0)
 #define gen_helper_pi32v2_trace(...) ((void)0)
 #define gen_helper_pi32v2_divs64(...) ((void)0)
+#define gen_helper_pi32v2_transfer_end(...) ((void)0)
 #endif

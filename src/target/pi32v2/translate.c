@@ -1081,6 +1081,18 @@ static uint32_t decode_operation(PiDisasContext *d, uint32_t here, uint16_t op)
         if (kind == 3) { store(d, read_gpr(d, dest), addr, MO_LEUL | MO_ALIGN); }
         else { load(d, gpr[dest], addr, MO_LEUL | MO_ALIGN); }
         next = here + 4;
+    } else if (op == 0xecde) {
+        uint16_t x = fetch(d, here + 2);
+        unsigned base = (x >> 4) & 15, dest = x >> 12;
+        /* Vendor ECDE 6732 (Kosmo trk_note_on) is r6 = [r3++=r7]: load at
+         * the old base, then add the unscaled incoming index. Only the load
+         * is attested; the destination/base alias stays rejected. */
+        if ((x & 15) != 2 || base == dest) { goto illegal; }
+        TCGv_i32 advanced = tcg_temp_new_i32();
+        tcg_gen_add_i32(advanced, read_gpr(d, base), read_gpr(d, (x >> 8) & 15));
+        load(d, gpr[dest], read_gpr(d, base), MO_LEUL | MO_ALIGN);
+        tcg_gen_mov_i32(gpr[base], advanced);
+        next = here + 4;
     } else if ((op & 0xfff8) == 0xec58) {
         /* Doubleword register-sum forms (post-index ones, extension bit 1
          * clear, are decoded above): written back before the access only

@@ -97,13 +97,15 @@ def parse(text):
 
 def reachable(code, app):
     """Static control flow from the entry and from function pointers stored in
-    the image: words that address a function prologue ([--sp] = {rets, ...})."""
+    the image: words that address a function or interrupt prologue
+    ([--sp] = {rets, ...} or {psr, rets, reti}). Halfword-aligned, since
+    immediates such as r1 = <handler> carry them too."""
     end = BASE + len(app)
     roots = {BASE}
-    for offset in range(0, len(app) - 3, 4):
+    for offset in range(0, len(app) - 3, 2):
         word = int.from_bytes(app[offset:offset + 4], "little")
         if BASE <= word < end and not word & 1 and word in code and \
-                code[word][1].startswith("[--sp] = {rets"):
+                code[word][1].startswith(("[--sp] = {rets", "[--sp] = {psr, rets")):
             roots.add(word)
     seen, work = set(), list(roots)
     while work:
